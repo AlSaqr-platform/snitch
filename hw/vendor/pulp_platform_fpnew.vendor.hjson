@@ -6,11 +6,10 @@
   target_dir: "pulp_platform_fpnew",
 
   upstream: {
-    url: "https://github.com/pulp-platform/fpnew.git",
-    rev: "feature/expanding_dotp",
+    url: "https://github.com/yvantor/cvfpu.git",
+    rev: "redmule",
   },
 
-  patch_dir: "patches/pulp_platform_fpnew",
 
   exclude_from_upstream: [
     "src/common_cells",
