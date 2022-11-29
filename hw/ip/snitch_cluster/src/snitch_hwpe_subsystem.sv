@@ -4,6 +4,12 @@
 
 // Author: Angelo Garofalo <agarofalo@iis.ee.ethz.ch>
 
+/**************************************************/
+/* This module wraps the hardware processing engine
+   and expose its data and ctrl interfaces 
+   towards the snitch cluster */
+/**************************************************/
+
 // includes
 `include "axi/assign.svh"
 `include "axi/typedef.svh"
@@ -16,13 +22,17 @@
 `include "tcdm_interface/typedef.svh"
 `include "snitch_vm/typedef.svh"
 
-// This module wraps the hardware processing engine
-// and expose its data and ctrl interfaces towards the snitch cluster
-
-module snitch_hwpe_subsystem #(
+module snitch_hwpe_subsystem 
+import fpnew_pkg::*;
+import hci_package::*;
+import redmule_pkg::*;
+import hwpe_ctrl_package::*;
+import hwpe_stream_package::*;
+import reqrsp_pkg::amo_op_e;
+#(
 	// struct params
-    parameter type tcdm_req_t = logic,
-    parameter type tcdm_rsp_t = logic,
+  parameter type         tcdm_req_t          = logic,
+  parameter type         tcdm_rsp_t          = logic,
 	// hwpe params
 	parameter int unsigned CtrlAddrWidth       = 32,
 	parameter int unsigned CtrlDataWidth       = 32,
@@ -31,9 +41,11 @@ module snitch_hwpe_subsystem #(
 	parameter int unsigned IdWidth             = 8,
 	parameter int unsigned NrCores             = 8,
 	// system params
-	parameter int unsigned  NarrowDataWidth     = 64,
-	parameter int unsigned  TCDMBankDataWidth  = 64,
-	localparam int unsigned NrNarrowPorts       = (AccDataWidth / NarrowDataWidth)
+	parameter int unsigned   NarrowDataWidth     = 64,
+	parameter int unsigned   TCDMBankDataWidth   = 64,
+  parameter int unsigned   NrNarrowPorts       = (AccDataWidth / NarrowDataWidth),
+
+  localparam int unsigned  BankOffsetAddr      = TCDMBankDataWidth/8 // assuming banks are byte addressable
 	)
 (
 	input clk_i, 
@@ -50,33 +62,9 @@ module snitch_hwpe_subsystem #(
 	
 );
 
-
-// internal signals definition: hwpe ctrl interface
-// (TODO): remove explicit width of signals. Use parameters aligned with system
-// here you might want to cut 32 MSbits of the axi_slv_hwpe_cfg* which is 64-bit wide
-// snitch issues 32-bit int data. bus is 64-bit wide
-logic periph_req;
-logic periph_gnt;
-logic [CtrlAddrWidth- 1:0] periph_add;
-logic periph_wen;
-logic [3:0] periph_be;
-logic [CtrlDataWidth- 1:0] periph_data;
-logic [IdWidth-1:0] periph_id;
-logic [CtrlDataWidth- 1:0] periph_r_data;
-logic periph_r_valid;
-logic [IdWidth-1:0] periph_r_id;
-
-// internal signals definition: hwpe data interface
-logic [NrNarrowPorts-1:0] tcdm_req;
-logic [NrNarrowPorts-1:0] tcdm_gnt;
-logic [NrNarrowPorts-1:0][AccAddrWidth- 1:0] tcdm_add;
-logic [NrNarrowPorts-1:0] tcdm_wen;
-logic [NrNarrowPorts-1:0][TCDMBankDataWidth/8- 1:0] tcdm_be;
-logic [NrNarrowPorts-1:0][TCDMBankDataWidth- 1:0] tcdm_data;
-logic [NrNarrowPorts-1:0][TCDMBankDataWidth- 1:0] tcdm_r_data;
-logic [NrNarrowPorts-1:0] tcdm_r_valid;
-logic tcdm_r_opc;
-logic tcdm_r_user;
+/**********************************/
+/* Internal Signals declaration   */
+/**********************************/
 
 // internal signals definition: event signals
 logic [NrCores-1:0][1:0] evt_o;
@@ -88,68 +76,78 @@ logic busy_o;
 // clock gating cells
 // TO DO
 
+// ctrl and data itf
+hci_core_intf #(.DW(AccDataWidth)) tcdm (.clk(clk_i));
+hwpe_ctrl_intf_periph #(.ID_WIDTH(IdWidth)) periph (.clk(clk_i));
 
-// binding tcdm struct with hwpe internals (from tcdm to pure req/gnt) -- ctrl port
-assign periph_req   		  = hwpe_ctrl_req_i.q_valid;
-assign periph_add   		  = hwpe_ctrl_req_i.q_addr;
-assign periph_wen   		  = hwpe_ctrl_req_i.q_write;
-assign periph_wdata 		  = hwpe_ctrl_req_i.q_data[31:0]; // (TODO) Parametrize
-assign periph_be    		  = hwpe_ctrl_req_i.q_strb;
-assign periph_id              = hwpe_ctrl_req_i.q_user;
-assign hwpe_ctrl_resp_o.p_data  = periph_r_data;
-assign hwpe_ctrl_resp_o.p_valid = periph_r_valid;
 
+/********************************************************************************/
 // binding tcdm struct with hwpe internals (from tcdm to pure req/gnt)-- data port
-assign narrow_hwpe_tcdm_req_o.q_valid = tcdm_req;
-assign narrow_hwpe_tcdm_req_o.q_addr  = tcdm_add;
-assign narrow_hwpe_tcdm_req_o.q_data  = tcdm_data;
-assign narrow_hwpe_tcdm_req_o.q_write = tcdm_wen; // check polarity
-assign narrow_hwpe_tcdm_req_o.q_strb  = tcdm_be;
-assign narrow_hwpe_tcdm_req_o.q_amo   = '0; // check for 'neutral' values
-assign narrow_hwpe_tcdm_req_o.q_user  = '0; // check for 'neutral' values
-assign tcdm_gnt                       = narrow_hwpe_tcdm_req_o.q_ready;
-assign tcdm_r_data                    = narrow_hwpe_tcdm_resp_i.p_data;
-assign tcdm_r_valid                   = narrow_hwpe_tcdm_resp_i.p_valid;
+/********************************************************************************/
+// internal tcdm response channel signals
+logic [NrNarrowPorts-1: 0] tcdm_gnt_flat;
+logic [NrNarrowPorts-1: 0] tcdm_rvalid_flat;
+//bindings
+genvar i;
+generate
+  for (i = 0; i < NrNarrowPorts; i++) begin
+    // request channel
+    assign narrow_hwpe_tcdm_req_o[i].q_valid             = tcdm.req;
+    assign narrow_hwpe_tcdm_req_o[i].q.addr              = tcdm.add + i* BankOffsetAddr;
+    assign narrow_hwpe_tcdm_req_o[i].q.write             = tcdm.wen;
+    assign narrow_hwpe_tcdm_req_o[i].q.strb              = tcdm.be[(i+1) * BankOffsetAddr -1 : i * BankOffsetAddr];
+    assign narrow_hwpe_tcdm_req_o[i].q.data              = tcdm.data[(i+1)*TCDMBankDataWidth - 1 : i * TCDMBankDataWidth];
+    assign narrow_hwpe_tcdm_req_o[i].q.amo               = reqrsp_pkg::AMONone;
+    assign narrow_hwpe_tcdm_req_o[i].q.user.core_id      = '0;
+    assign narrow_hwpe_tcdm_req_o[i].q.user.is_core      = 1'b0;
+    // response channel
+    assign tcdm_rvalid_flat[i]                           = narrow_hwpe_tcdm_resp_i[i].p_valid;
+    assign tcdm_gnt_flat[i]                              = narrow_hwpe_tcdm_resp_i[i].q_ready; // check for a cleaner way
+    assign tcdm.r_data[(i+1)*TCDMBankDataWidth - 1 : i * TCDMBankDataWidth] = narrow_hwpe_tcdm_resp_i[i].p.data;
+  end
+  assign tcdm.gnt                                        = &(tcdm_gnt_flat);
+  assign tcdm.r_valid                                    = &(tcdm_rvalid_flat);
+endgenerate
 
 
-// tensorcore instance
-redmule_wrap #(
-	//.ID_WIDTH         (IdWidth), // (TODO) specify value 
-	.NrCores          (NrCores),
-	.AccDataWidth     (AccDataWidth),
-	.AccAddrWidth     (AccAddrWidth),
-	.TCDMBankDataWidth(TCDMBankDataWidth),
-	.CtrlDataWidth    (CtrlDataWidth),
-	.CtrlAddrWidth    (CtrlAddrWidth)
-) i_redmule_wrap (
-	.clk_i         (clk_i         ),
-	.rst_ni        (rst_ni        ),
-	.test_mode_i   (test_mode_i   ),
-	.evt_o         (evt_o         ), // TODO: Check connection ! Signal/port not matching : Expecting logic [Nrcores-1:0][1:0]  -- Found logic [NrCores-1:0][1:0] 
-	.busy_o        (busy_o        ),
-	.tcdm_req      (tcdm_req      ),
-	.tcdm_gnt      (tcdm_gnt      ),
-	.tcdm_add      (tcdm_add      ), // TODO: Check connection ! Signal/port not matching : Expecting logic [NrNarrowPorts-1:0][AccAddrWidth-1:0]  -- Found logic [NrNarrowPorts-1:0][31:0] 
-	.tcdm_wen      (tcdm_wen      ),
-	.tcdm_be       (tcdm_be       ),
-	.tcdm_data     (tcdm_data     ), // TODO: Check connection ! Signal/port not matching : Expecting logic [NrNarrowPorts-1:0][TCDMBankDataWidth-1:0]  -- Found logic [NrNarrowPorts-1:0][TCDMBankDataWidth-1:0] 
-	.tcdm_r_data   (tcdm_r_data   ), // TODO: Check connection ! Signal/port not matching : Expecting logic [NrNarrowPorts-1:0][TCDMBankDataWidth-1:0]  -- Found logic [NrNarrowPorts-1:0][TCDMBankDataWidth-1:0] 
-	.tcdm_r_valid  (tcdm_r_valid  ),
-	.tcdm_r_opc    (tcdm_r_opc    ),
-	.tcdm_r_user   (tcdm_r_user   ),
-	.periph_req    (periph_req    ),
-	.periph_gnt    (periph_gnt    ),
-	.periph_add    (periph_add    ),
-	.periph_wen    (periph_wen    ),
-	.periph_be     (periph_be     ),
-	.periph_data   (periph_data   ),
-	.periph_id     (periph_id     ),
-	.periph_r_data (periph_r_data ),
-	.periph_r_valid(periph_r_valid),
-	.periph_r_id   (periph_r_id   )
+/**********************************************************************************/
+// binding tcdm struct with hwpe internals (from tcdm to pure req/gnt) -- ctrl port
+/**********************************************************************************/
+always_comb begin
+  periph.req               = hwpe_ctrl_req_i.q_valid;
+  periph.add               = hwpe_ctrl_req_i.q.addr;
+  periph.wen               = hwpe_ctrl_req_i.q.write;
+  periph.data              = hwpe_ctrl_req_i.q.data[31:0]; // (TODO) Parametrize
+  periph.be                = hwpe_ctrl_req_i.q.strb;
+  periph.id                = hwpe_ctrl_req_i.q.user;
+  hwpe_ctrl_resp_o.q_ready = periph.gnt;
+  hwpe_ctrl_resp_o.p.data  = periph.r_data;
+  hwpe_ctrl_resp_o.p_valid = periph.r_valid;
+end
+
+
+/*******************/
+/* HWPE Instance   */
+/*******************/
+
+redmule_top #(
+  .ID_WIDTH     ( IdWidth      ),
+  .N_CORES      ( NrCores      ),
+  .DW           ( AccDataWidth )
+) i_redmule_top (
+  .clk_i        ( clk_i        ),
+  .rst_ni       ( rst_ni       ),
+  .test_mode_i  ( test_mode_i  ),
+  .evt_o        ( evt_o        ),
+  .busy_o       ( busy_o       ),
+  .tcdm         ( tcdm         ),
+  .periph       ( periph       )
 );
 
-// ASSERTION
+
+/***************/
+/* Assertions  */
+/***************/
 
 endmodule : snitch_hwpe_subsystem
 

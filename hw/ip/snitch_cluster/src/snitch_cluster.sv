@@ -53,6 +53,12 @@ module snitch_cluster
   /// as cores. If SSRs are enabled, we recommend 4 times the the number of
   /// banks.
   parameter int unsigned NrBanks            = NrCores,
+  // address width of HWPE ctrl port (bit)
+  parameter int unsigned HwpeCtrlAddrWidth  = 32,
+  // data width of the HWPE ctrl port (bit)
+  parameter int unsigned HwpeCtrlDataWidth  = 32,
+  // data width of the HWPE data port (bit)
+  parameter int unsigned HwpeDataWidth      = 288,
   /// Size of DMA AXI buffer.
   parameter int unsigned DMAAxiReqFifoDepth = 3,
   /// Size of DMA request fifo.
@@ -244,21 +250,30 @@ module snitch_cluster
     return (NumSsrs[core] > 1 ? NumSsrs[core] : 1);
   endfunction
 
+  // for some reason it returns the wrong value when invoked
   function automatic int unsigned get_tcdm_port_offs(int unsigned core_idx);
     automatic int n = 0;
     for (int i = 0; i < core_idx; i++) n += get_tcdm_ports(i);
     return n;
   endfunction
 
+  function automatic int unsigned get_tcdm_port_hwpe(int unsigned Hwpe_dw);
+    automatic int unsigned nr_ports = 0;
+    nr_ports  = Hwpe_dw >> $clog2(NarrowDataWidth);
+    nr_ports += (Hwpe_dw % NarrowDataWidth) ? 1 : 0 ;
+    return nr_ports;
+  endfunction  
+
   localparam int unsigned NrTCDMPortsCores = get_tcdm_port_offs(NrCores);
-  localparam int unsigned NumTCDMIn = NrTCDMPortsCores + 1;
+  localparam int unsigned NrTCDMPortsHwpe  = get_tcdm_port_hwpe(HwpeDataWidth);
+  localparam int unsigned NumTCDMIn = NrTCDMPortsCores + NrTCDMPortsHwpe + 1;
   localparam logic [PhysicalAddrWidth-1:0] TCDMMask = ~(TCDMSize-1);
 
   // Core Requests, SoC Request, PTW.
   localparam int unsigned NrNarrowMasters = 3;
   localparam int unsigned NarrowIdWidthOut = $clog2(NrNarrowMasters) + NarrowIdWidthIn;
 
-  localparam int unsigned NrSlaves = 3;
+  localparam int unsigned NrSlaves = 4; // 4 slaves -- 1 tcdm, 2 periph, 3 external, 4 hwpe
   localparam int unsigned NrRules = NrSlaves - 1;
 
   // DMA, SoC Request, `n` instruction caches.
@@ -448,6 +463,10 @@ module snitch_cluster
   assign zero_mem_start_address = cluster_periph_end_address;
   assign zero_mem_end_address   = cluster_periph_end_address + ZeroMemorySize * 1024;
 
+  addr_t hwpe_mem_start_address, hwpe_mem_end_address;
+  assign hwpe_mem_start_address = zero_mem_end_address;
+  assign hwpe_mem_end_address   = hwpe_mem_start_address + 16'h0400;
+
   // ----------------
   // Wire Definitions
   // ----------------
@@ -497,7 +516,13 @@ module snitch_cluster
   reg_req_t reg_req;
   reg_rsp_t reg_rsp;
 
-  // 5. Misc. Wires.
+  // 6. Hardware Processing Engine Control and Data Ports
+  tcdm_req_t hwpe_ctrl_req;
+  tcdm_rsp_t hwpe_ctrl_resp;
+  tcdm_rsp_t [NrTCDMPortsHwpe-1:0] narrow_hwpe_tcdm_resp;
+  tcdm_req_t [NrTCDMPortsHwpe-1:0] narrow_hwpe_tcdm_req;
+
+  // 7. Misc. Wires.
   logic icache_prefetch_enable;
   logic [NrCores-1:0] cl_interrupt;
 
@@ -765,8 +790,8 @@ module snitch_cluster
   ) i_tcdm_interconnect (
     .clk_i,
     .rst_ni,
-    .req_i ({axi_soc_req, tcdm_req}),
-    .rsp_o ({axi_soc_rsp, tcdm_rsp}),
+    .req_i ({axi_soc_req, tcdm_req, narrow_hwpe_tcdm_req}),
+    .rsp_o ({axi_soc_rsp, tcdm_rsp, narrow_hwpe_tcdm_resp}),
     .mem_req_o (ic_req),
     .mem_rsp_i (ic_rsp)
   );
@@ -1067,6 +1092,12 @@ module snitch_cluster
       idx:        ClusterPeripherals,
       start_addr: cluster_periph_start_address,
       end_addr:   cluster_periph_end_address
+    },
+    // add HWPE
+    '{
+      idx:        HardwareProcessingEngine,
+      start_addr: hwpe_mem_start_address,
+      end_addr:   hwpe_mem_end_address
     }
   };
 
@@ -1190,6 +1221,7 @@ module snitch_cluster
     .icache_events_i (icache_events)
   );
 
+  // 3. to external
   // Optionally decouple the external narrow AXI master ports.
   axi_cut #(
     .Bypass     ( !RegisterExtNarrow ),
@@ -1208,6 +1240,52 @@ module snitch_cluster
     .mst_req_o  ( narrow_out_req_o   ),
     .mst_resp_i ( narrow_out_resp_i   )
   );
+
+  // 4. Hardware Processing Engine
+  // axi to tcdm converter
+  // needed since hwpe uses tcdm protocol (req/gnt) on the ctrl interface
+  axi_to_tcdm #(
+    .axi_req_t (axi_slv_req_t),
+    .axi_rsp_t (axi_slv_resp_t),
+    .tcdm_req_t (tcdm_req_t),
+    .tcdm_rsp_t (tcdm_rsp_t),
+    .IdWidth (NarrowIdWidthOut),
+    .AddrWidth(HwpeCtrlAddrWidth), // hwpe expects 32-bit address --> axi slv has 48-bit. This module works well with different addr width?
+    .DataWidth(HwpeCtrlDataWidth)  // hwpe epxects 32-bit data --> axi has 64-bit. Does this module work well with different data width?
+  ) i_axi_to_hwpe (
+    .clk_i     (clk_i     ),
+    .rst_ni    (rst_ni    ),
+    .axi_req_i (narrow_axi_slv_req[HardwareProcessingEngine]),
+    .axi_rsp_o (narrow_axi_slv_rsp[HardwareProcessingEngine]),
+    .tcdm_req_o(hwpe_ctrl_req),
+    .tcdm_rsp_i(hwpe_ctrl_resp)
+  );
+
+
+
+  snitch_hwpe_subsystem #(
+    .tcdm_req_t       (tcdm_req_t),
+    .tcdm_rsp_t       (tcdm_rsp_t),
+    .CtrlAddrWidth    (HwpeCtrlAddrWidth), 
+    .CtrlDataWidth    (HwpeCtrlDataWidth),
+    .AccAddrWidth     (32), // PUT PARAMETER
+    .AccDataWidth     (HwpeDataWidth),
+    .IdWidth          (8), // TO CHECK 
+    .NrCores          (NrCores),
+    .NarrowDataWidth  (NarrowDataWidth),
+    .TCDMBankDataWidth(NarrowDataWidth), 
+    .NrNarrowPorts    (NrTCDMPortsHwpe)
+  ) i_snitch_hwpe_subsystem (
+    .clk_i                  (clk_i                  ),
+    .rst_ni                 (rst_ni                 ),
+    .test_mode_i            (1'b0                   ),
+    .narrow_hwpe_tcdm_resp_i(narrow_hwpe_tcdm_resp  ),
+    .narrow_hwpe_tcdm_req_o (narrow_hwpe_tcdm_req   ),
+    .hwpe_ctrl_req_i        (hwpe_ctrl_req          ),
+    .hwpe_ctrl_resp_o       (hwpe_ctrl_resp         )
+  );
+
+
 
   // --------------------
   // TCDM event counters

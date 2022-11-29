@@ -10,7 +10,8 @@ package:
 dependencies:
   axi: {path: ../../vendor/pulp_platform_axi}
   common_cells: {path: ../../vendor/pulp_platform_common_cells}
-  fpnew: {path: ../../vendor/pulp_platform_fpnew}
+  #fpnew: {path: ../../vendor/pulp_platform_fpnew}
+  fpnew:                  { git: "https://github.com/yvantor/cvfpu.git"            , rev: "stallable" }
   register_interface: {path: ../../vendor/pulp_platform_register_interface}
   riscv-dbg: {path: ../../vendor/pulp_platform_riscv_dbg}
   tech_cells_generic: {path: ../../vendor/pulp_platform_tech_cells_generic}
@@ -25,6 +26,7 @@ dependencies:
   snitch_vm: {path: ../../ip/snitch_vm}
   snitch_ssr: {path: ../../ip/snitch_ssr}
   snitch: {path: ../../ip/snitch}
+  redmule: {git: git@iis-git.ee.ethz.ch:ytortorella/redmule.git, rev: "890dd679afc04c4ace9b17bedda252b00e9d6dc0" }
 
 sources:
 # Level 0:
@@ -35,6 +37,7 @@ sources:
 - src/snitch_fpu.sv
 - src/snitch_sequencer.sv
 - src/snitch_tcdm_interconnect.sv
+- src/snitch_hwpe_subsystem.sv
 # Level 1:
 - src/snitch_barrier.sv
 - src/snitch_fp_ss.sv
