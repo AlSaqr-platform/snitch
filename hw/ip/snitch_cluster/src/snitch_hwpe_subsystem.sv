@@ -94,7 +94,7 @@ generate
     // request channel
     assign narrow_hwpe_tcdm_req_o[i].q_valid             = tcdm.req;
     assign narrow_hwpe_tcdm_req_o[i].q.addr              = tcdm.add + i* BankOffsetAddr;
-    assign narrow_hwpe_tcdm_req_o[i].q.write             = tcdm.wen;
+    assign narrow_hwpe_tcdm_req_o[i].q.write             = ~tcdm.wen;
     assign narrow_hwpe_tcdm_req_o[i].q.strb              = tcdm.be[(i+1) * BankOffsetAddr -1 : i * BankOffsetAddr];
     assign narrow_hwpe_tcdm_req_o[i].q.data              = tcdm.data[(i+1)*TCDMBankDataWidth - 1 : i * TCDMBankDataWidth];
     assign narrow_hwpe_tcdm_req_o[i].q.amo               = reqrsp_pkg::AMONone;
@@ -116,7 +116,7 @@ endgenerate
 always_comb begin
   periph.req               = hwpe_ctrl_req_i.q_valid;
   periph.add               = hwpe_ctrl_req_i.q.addr;
-  periph.wen               = hwpe_ctrl_req_i.q.write;
+  periph.wen               = ~hwpe_ctrl_req_i.q.write;
   periph.data              = hwpe_ctrl_req_i.q.data[31:0]; // (TODO) Parametrize
   periph.be                = hwpe_ctrl_req_i.q.strb;
   periph.id                = hwpe_ctrl_req_i.q.user;
