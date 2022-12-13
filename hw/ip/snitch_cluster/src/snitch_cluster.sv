@@ -250,7 +250,6 @@ module snitch_cluster
     return (NumSsrs[core] > 1 ? NumSsrs[core] : 1);
   endfunction
 
-  // for some reason it returns the wrong value when invoked
   function automatic int unsigned get_tcdm_port_offs(int unsigned core_idx);
     automatic int n = 0;
     for (int i = 0; i < core_idx; i++) n += get_tcdm_ports(i);
@@ -344,6 +343,10 @@ module snitch_cluster
   typedef logic [NarrowUserWidth-1:0]   user_t;
   typedef logic [WideUserWidth-1:0]     user_dma_t;
 
+  typedef logic [HwpeCtrlAddrWidth-1:0]   addr_hwpe_ctrl_t;
+  typedef logic [HwpeCtrlDataWidth-1:0]   data_hwpe_ctrl_t;
+  typedef logic [HwpeCtrlDataWidth/8-1:0] strb_hwpe_ctrl_t;
+
   typedef logic [TCDMMemAddrWidth-1:0]  tcdm_mem_addr_t;
   typedef logic [TCDMAddrWidth-1:0]     tcdm_addr_t;
 
@@ -355,6 +358,7 @@ module snitch_cluster
   // Regbus peripherals.
   `AXI_TYPEDEF_ALL(axi_mst, addr_t, id_mst_t, data_t, strb_t, user_t)
   `AXI_TYPEDEF_ALL(axi_slv, addr_t, id_slv_t, data_t, strb_t, user_t)
+  `AXI_TYPEDEF_ALL(axi_mst_downsize, addr_hwpe_ctrl_t, id_slv_t, data_hwpe_ctrl_t, strb_hwpe_ctrl_t, user_t)
   `AXI_TYPEDEF_ALL(axi_mst_dma, addr_t, id_dma_mst_t, data_dma_t, strb_dma_t, user_dma_t)
   `AXI_TYPEDEF_ALL(axi_slv_dma, addr_t, id_dma_slv_t, data_dma_t, strb_dma_t, user_dma_t)
 
@@ -365,6 +369,7 @@ module snitch_cluster
 
   `TCDM_TYPEDEF_ALL(tcdm, tcdm_addr_t, data_t, strb_t, tcdm_user_t)
   `TCDM_TYPEDEF_ALL(tcdm_dma, tcdm_addr_t, data_dma_t, strb_dma_t, logic)
+  `TCDM_TYPEDEF_ALL(hwpectrl, addr_hwpe_ctrl_t, data_hwpe_ctrl_t, strb_hwpe_ctrl_t, logic)
 
   `REG_BUS_TYPEDEF_REQ(reg_req_t, addr_t, data_t, strb_t)
   `REG_BUS_TYPEDEF_RSP(reg_rsp_t, data_t)
@@ -477,6 +482,9 @@ module snitch_cluster
   axi_mst_req_t  [NrNarrowMasters-1:0] narrow_axi_mst_req;
   axi_mst_resp_t [NrNarrowMasters-1:0] narrow_axi_mst_rsp;
 
+  axi_mst_downsize_req_t  downsized_narrow_axi_mst_req;
+  axi_mst_downsize_resp_t downsized_narrow_axi_mst_rsp;
+
   // DMA AXI buses
   axi_mst_dma_req_t  [NrWideMasters-1:0] wide_axi_mst_req;
   axi_mst_dma_resp_t [NrWideMasters-1:0] wide_axi_mst_rsp;
@@ -517,8 +525,8 @@ module snitch_cluster
   reg_rsp_t reg_rsp;
 
   // 6. Hardware Processing Engine Control and Data Ports
-  tcdm_req_t hwpe_ctrl_req;
-  tcdm_rsp_t hwpe_ctrl_resp;
+  hwpectrl_req_t  hwpe_ctrl_req;
+  hwpectrl_rsp_t hwpe_ctrl_resp;
   tcdm_rsp_t [NrTCDMPortsHwpe-1:0] narrow_hwpe_tcdm_resp;
   tcdm_req_t [NrTCDMPortsHwpe-1:0] narrow_hwpe_tcdm_req;
 
@@ -1244,19 +1252,49 @@ module snitch_cluster
   // 4. Hardware Processing Engine
   // axi to tcdm converter
   // needed since hwpe uses tcdm protocol (req/gnt) on the ctrl interface
+    
+  axi_dw_downsizer #(
+    .AxiMaxReads         (1),           // Number of outstanding reads
+    .AxiSlvPortDataWidth (NarrowDataWidth),           // Data width of the slv port
+    .AxiMstPortDataWidth (HwpeCtrlDataWidth),           // Data width of the mst port
+    .AxiAddrWidth        (PhysicalAddrWidth),           // Address width
+    .AxiIdWidth          (NarrowIdWidthOut),           // ID width
+    .aw_chan_t           (axi_slv_aw_chan_t),           // AW Channel Type
+    .mst_w_chan_t (axi_mst_downsize_w_chan_t),           //  W Channel Type for mst port
+    .slv_w_chan_t (axi_slv_w_chan_t),           //  W Channel Type for slv port
+    .b_chan_t (axi_slv_b_chan_t),           //  B Channel Type
+    .ar_chan_t (axi_slv_ar_chan_t),           // AR Channel Type
+    .mst_r_chan_t (axi_mst_downsize_r_chan_t),           //  R Channel Type for mst port
+    .slv_r_chan_t (axi_slv_r_chan_t),           //  R Channel Type for slv port
+    .axi_mst_req_t (axi_mst_downsize_req_t),           // AXI Request Type for mst ports
+    .axi_mst_resp_t (axi_mst_downsize_resp_t),           // AXI Response Type for mst ports
+    .axi_slv_req_t (axi_slv_req_t),           // AXI Request Type for slv ports 
+    .axi_slv_resp_t (axi_slv_resp_t)          // AXI Response Type for slv ports
+  ) i_axi_dw_downsize(
+    .clk_i (clk_i),
+    .rst_ni (rst_ni),
+    // Slave interface
+    .slv_req_i (narrow_axi_slv_req[HardwareProcessingEngine]),
+    .slv_resp_o (narrow_axi_slv_rsp[HardwareProcessingEngine]),
+    // Master interface
+    .mst_req_o (downsized_narrow_axi_mst_req),
+    .mst_resp_i (downsized_narrow_axi_mst_rsp)
+  );
+
+
   axi_to_tcdm #(
-    .axi_req_t (axi_slv_req_t),
-    .axi_rsp_t (axi_slv_resp_t),
-    .tcdm_req_t (tcdm_req_t),
-    .tcdm_rsp_t (tcdm_rsp_t),
+    .axi_req_t (axi_mst_downsize_req_t),
+    .axi_rsp_t (axi_mst_downsize_resp_t),
+    .tcdm_req_t (hwpectrl_req_t),
+    .tcdm_rsp_t (hwpectrl_rsp_t),
     .IdWidth (NarrowIdWidthOut),
     .AddrWidth(HwpeCtrlAddrWidth), // hwpe expects 32-bit address --> axi slv has 48-bit. This module works well with different addr width?
     .DataWidth(HwpeCtrlDataWidth)  // hwpe epxects 32-bit data --> axi has 64-bit. Does this module work well with different data width?
   ) i_axi_to_hwpe (
     .clk_i     (clk_i     ),
     .rst_ni    (rst_ni    ),
-    .axi_req_i (narrow_axi_slv_req[HardwareProcessingEngine]),
-    .axi_rsp_o (narrow_axi_slv_rsp[HardwareProcessingEngine]),
+    .axi_req_i (downsized_narrow_axi_mst_req),
+    .axi_rsp_o (downsized_narrow_axi_mst_rsp),
     .tcdm_req_o(hwpe_ctrl_req),
     .tcdm_rsp_i(hwpe_ctrl_resp)
   );
@@ -1266,6 +1304,8 @@ module snitch_cluster
   snitch_hwpe_subsystem #(
     .tcdm_req_t       (tcdm_req_t),
     .tcdm_rsp_t       (tcdm_rsp_t),
+    .hwpectrl_req_t   (hwpectrl_req_t),
+    .hwpectrl_rsp_t  (hwpectrl_rsp_t), 
     .CtrlAddrWidth    (HwpeCtrlAddrWidth), 
     .CtrlDataWidth    (HwpeCtrlDataWidth),
     .AccAddrWidth     (32), // PUT PARAMETER

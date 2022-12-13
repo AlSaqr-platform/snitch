@@ -33,6 +33,9 @@ import reqrsp_pkg::amo_op_e;
 	// struct params
   parameter type         tcdm_req_t          = logic,
   parameter type         tcdm_rsp_t          = logic,
+  parameter type         hwpectrl_req_t     = logic,
+  parameter type         hwpectrl_rsp_t    = logic,
+
 	// hwpe params
 	parameter int unsigned CtrlAddrWidth       = 32,
 	parameter int unsigned CtrlDataWidth       = 32,
@@ -57,8 +60,8 @@ import reqrsp_pkg::amo_op_e;
 	output tcdm_req_t [NrNarrowPorts-1:0] narrow_hwpe_tcdm_req_o,
 	
 	// ctrl interface towards the hwpe (hwpe is AXI slave)
-	input  tcdm_req_t hwpe_ctrl_req_i,
-	output tcdm_rsp_t hwpe_ctrl_resp_o
+	input  hwpectrl_req_t hwpe_ctrl_req_i,
+	output hwpectrl_rsp_t hwpe_ctrl_resp_o
 	
 );
 
@@ -87,6 +90,13 @@ hwpe_ctrl_intf_periph #(.ID_WIDTH(IdWidth)) periph (.clk(clk_i));
 // internal tcdm response channel signals
 logic [NrNarrowPorts-1: 0] tcdm_gnt_flat;
 logic [NrNarrowPorts-1: 0] tcdm_rvalid_flat;
+
+function automatic int unsigned get_upper_bound(int unsigned narrow_port_idx, int unsigned TCDMBankDataWidth, int unsigned AccDataWidth);
+    int unsigned up_idx;
+    up_idx = (((narrow_port_idx+1)*TCDMBankDataWidth) > AccDataWidth) ? AccDataWidth - 1 : (narrow_port_idx+1) * TCDMBankDataWidth -1; 
+    return up_idx;
+endfunction
+
 //bindings
 genvar i;
 generate
@@ -95,8 +105,8 @@ generate
     assign narrow_hwpe_tcdm_req_o[i].q_valid             = tcdm.req;
     assign narrow_hwpe_tcdm_req_o[i].q.addr              = tcdm.add + i* BankOffsetAddr;
     assign narrow_hwpe_tcdm_req_o[i].q.write             = ~tcdm.wen;
-    assign narrow_hwpe_tcdm_req_o[i].q.strb              = tcdm.be[(i+1) * BankOffsetAddr -1 : i * BankOffsetAddr];
-    assign narrow_hwpe_tcdm_req_o[i].q.data              = tcdm.data[(i+1)*TCDMBankDataWidth - 1 : i * TCDMBankDataWidth];
+    assign narrow_hwpe_tcdm_req_o[i].q.strb              = (64'd0) & tcdm.be[(i+1) * BankOffsetAddr -1 : i * BankOffsetAddr];
+    assign narrow_hwpe_tcdm_req_o[i].q.data              = (64'd0) & tcdm.data[get_upper_bound(i, TCDMBankDataWidth, AccDataWidth) : i * TCDMBankDataWidth];
     assign narrow_hwpe_tcdm_req_o[i].q.amo               = reqrsp_pkg::AMONone;
     assign narrow_hwpe_tcdm_req_o[i].q.user.core_id      = '0;
     assign narrow_hwpe_tcdm_req_o[i].q.user.is_core      = 1'b0;
