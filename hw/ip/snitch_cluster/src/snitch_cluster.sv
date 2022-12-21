@@ -1253,7 +1253,7 @@ module snitch_cluster
   // axi to tcdm converter
   // needed since hwpe uses tcdm protocol (req/gnt) on the ctrl interface
     
-  axi_dw_downsizer #(
+  axi_dw_converter #(
     .AxiMaxReads         (1),           // Number of outstanding reads
     .AxiSlvPortDataWidth (NarrowDataWidth),           // Data width of the slv port
     .AxiMstPortDataWidth (HwpeCtrlDataWidth),           // Data width of the mst port
