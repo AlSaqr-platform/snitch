@@ -15,52 +15,65 @@
 
 int main()
 {
-  uint32_t core_idx = snrt_global_core_idx();
-  uint32_t core_num = snrt_global_core_num();
 
-  if (core_idx==0) {
+  const uint32_t cluster_num = snrt_cluster_num();
+  const uint32_t cluster_id = snrt_cluster_idx();
+  const uint32_t compute_num = snrt_cluster_compute_core_num();
+  const uint32_t compute_id = snrt_cluster_compute_core_idx();
 
-    // Declarations
-    int err = 0;
-    uint16_t m_size   = M_SIZE;
-    uint16_t n_size   = N_SIZE;
-    uint16_t k_size   = K_SIZE;
+  // Declarations
+  int err = 0;
+  uint16_t m_size   = M_SIZE;
+  uint16_t n_size   = N_SIZE;
+  uint16_t k_size   = K_SIZE;
 
-    uint16_t x_dim = m_size*n_size;
-    uint16_t w_dim = n_size*k_size;
-    uint16_t y_dim = m_size*k_size;
-    uint16_t z_dim = m_size*k_size;
-    uint32_t n_ops = m_size*n_size*k_size;
-    uint8_t  ratio = ADDR_WIDTH/FPFORMAT;
+  uint16_t x_dim = m_size*n_size;
+  uint16_t w_dim = n_size*k_size;
+  uint16_t y_dim = m_size*k_size;
+  uint16_t z_dim = m_size*k_size;
+  uint32_t n_ops = m_size*n_size*k_size;
+  uint8_t  ratio = ADDR_WIDTH/FPFORMAT;
+  
+  // allocate memory
+  void *ptr;
+  uint32_t total_size = ratio * ( x_dim + w_dim + y_dim + z_dim);
+  
+  if (compute_id == 0) {
+      ptr = snrt_l1alloc(total_size);
+  }
+  uint8_t volatile *x = ptr;
+  uint8_t volatile *w = ptr + ratio*x_dim;
+  uint8_t volatile *y = ptr + ratio*x_dim + ratio*w_dim;
+  uint8_t volatile *z = ptr + ratio*x_dim + ratio*w_dim + ratio*y_dim;
+  
+  snrt_cluster_hw_barrier();
 
-    // allocate memory
-    uint8_t volatile x[ratio*x_dim];
-    uint8_t volatile w[ratio*w_dim];
-    uint8_t volatile y[ratio*y_dim];
-    uint8_t volatile z[ratio*z_dim];
+  // if (compute_id==0) {
+  //   // // silly init temporary
+  //   uint8_t seed = 0x00;
+  //   for (int i=0; i<ratio*x_dim; i++) {
+  //     seed += 0x01;
+  //     x[i] = seed;
+  //   }
+  //   seed = 0x00;
+  //   for (int i=0; i<ratio*w_dim; i++) {
+  //     seed += 0x01;
+  //     w[i]=seed;
+  //   }
+  //   seed = 0x00;
+  //   for (int i=0; i<ratio*y_dim; i++) {
+  //     seed += 0x01;
+  //     y[i]=seed;
+  //   }
+  //   seed = 0x00;
+  //   for (int i=0; i<ratio*z_dim; i++) {
+  //     seed += 0x01;
+  //     z[i]= seed;
+  //   }
+  // }
 
-    // // silly init temporary
-    uint8_t seed = 0xAA;
-    for (int i=0; i<ratio*x_dim; i++) {
-      seed = ~seed;
-      x[i]=seed;
-    }
-    for (int i=0; i<ratio*w_dim; i++) {
-      seed = ~seed;
-      w[i]=seed;
-    }
-    for (int i=0; i<ratio*y_dim; i++) {
-      seed = ~seed;
-      y[i]=seed;
-    }
-    for (int i=0; i<ratio*z_dim; i++) {
-      seed = ~seed;
-      z[i]=seed;
-    }
+  snrt_cluster_hw_barrier();
 
-    // Generate data
-    //generate_test_data((int) &x[0], (int) &w[0], (int) &y[0], (int) x_dim, (int) w_dim, (int) y_dim, ratio);
-    
     // Enable clock
     //hwpe_clock_enable();
 
@@ -68,6 +81,11 @@ int main()
     // REDMULE_SETPRIORITY_REDMULE(); // priority to REDMULE w.r.t. cores, DMA
     // REDMULE_RESET_MAXSTALL();  // reset maximum stall
     // REDMULE_SET_MAXSTALL(8);   // set maximum consecutive stall to 8 cycles for cores, DMA side
+  
+  if (snrt_is_compute_core() && compute_id == 0) {
+
+    // generate test data
+    generate_test_data((int) &x[0], (int) &w[0], (int) &y[0], (int) x_dim, (int) w_dim, (int) y_dim, ratio);
 
     // soft-clear REDMULE
     hwpe_soft_clear();
@@ -101,7 +119,7 @@ int main()
   }
 
   // snitch hardware barrier
-  // snrt_cluster_hw_barrier();
+  snrt_cluster_hw_barrier();
 
   // exit code
   return 0;

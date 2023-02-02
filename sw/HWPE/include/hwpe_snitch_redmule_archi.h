@@ -51,7 +51,7 @@
 #define __builtin_bitinsert(a,b,c,d) (a | (((b << (32-c)) >> (32-c)) << d))
 
 // RedMulE architecture
-#define ADDR_WIDTH   32
+#define ADDR_WIDTH   64
 #define DATA_WIDTH   256
 #define FPFORMAT     16
 #define ARRAY_HEIGHT 4
