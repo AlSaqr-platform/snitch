@@ -724,6 +724,9 @@ module snitch_cluster
       data_t mem_rdata, mem_wdata;
 
       tc_sram #(
+`ifdef TARGET_TECH_MEM
+        .MemType  ("Scratchpad"),
+`endif
         .NumWords (TCDMDepth),
         .DataWidth (NarrowDataWidth),
         .ByteWidth (8),
@@ -1305,7 +1308,7 @@ module snitch_cluster
     .tcdm_req_t       (tcdm_req_t),
     .tcdm_rsp_t       (tcdm_rsp_t),
     .hwpectrl_req_t   (hwpectrl_req_t),
-    .hwpectrl_rsp_t  (hwpectrl_rsp_t), 
+    .hwpectrl_rsp_t   (hwpectrl_rsp_t), 
     .CtrlAddrWidth    (HwpeCtrlAddrWidth), 
     .CtrlDataWidth    (HwpeCtrlDataWidth),
     .AccAddrWidth     (32), // PUT PARAMETER

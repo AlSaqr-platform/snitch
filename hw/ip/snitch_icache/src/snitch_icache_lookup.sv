@@ -146,6 +146,9 @@ module snitch_icache_lookup #(
     // Instantiate the RAM sets.
     for (genvar i = 0; i < CFG.SET_COUNT; i++) begin : g_sets
         tc_sram #(
+`ifdef TARGET_TECH_MEM
+          .MemType ("Cache"),
+`endif
           .NumWords (CFG.LINE_COUNT),
           .DataWidth (CFG.TAG_WIDTH+2),
           .ByteWidth (8),
@@ -166,6 +169,9 @@ module snitch_icache_lookup #(
         );
 
         tc_sram #(
+`ifdef TARGET_TECH_MEM
+          .MemType ("Cache"),
+`endif
           .NumWords (CFG.LINE_COUNT),
           .DataWidth (CFG.LINE_WIDTH),
           .ByteWidth (8),
