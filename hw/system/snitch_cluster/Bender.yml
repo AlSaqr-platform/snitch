@@ -9,6 +9,7 @@ package:
   - Thomas Benz <tbenz@iis.ee.ethz.ch>
 
 dependencies:
+  tech_mem: {path: intel16/tech_mem}
   snitch_cluster: {path: ../../ip/snitch_cluster}
   axi: {path: ../../vendor/pulp_platform_axi}
   test: {path: ../../ip/test}

@@ -26,7 +26,6 @@ dependencies:
   snitch_vm: {path: ../../ip/snitch_vm}
   snitch_ssr: {path: ../../ip/snitch_ssr}
   snitch: {path: ../../ip/snitch}
-  tech_mem: {path: intel16/tech_mem}
   redmule: {git: git@iis-git.ee.ethz.ch:ytortorella/redmule.git, rev: "890dd679afc04c4ace9b17bedda252b00e9d6dc0" }
 
 sources:
