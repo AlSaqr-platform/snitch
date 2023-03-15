@@ -28,6 +28,8 @@ VLT_FLAGS    += --trace
 VSIM_FLAGS    += -t 1ps
 VSIM_FLAGS    += -voptargs=+acc
 VSIM_FLAGS    += -do "log -r /*; run -a"
+VSIM_FLAGS    += +notimingchecks
+VSIM_FLAGS    += +nospecify
 
 VLOG_FLAGS 	  += -svinputport=compat
 VLOG_FLAGS 	  += -override_timescale 1ns/1ps
@@ -91,12 +93,13 @@ bin/snitch_cluster.vlt: $(VLT_AR) $(VLT_COBJ) ${VLT_BUILDDIR}/lib/libfesvr.a
 ############
 ${VSIM_BUILDDIR}/compile.vsim.tcl: $(VSIM_SOURCES) ${TB_SRCS} ${TB_DIR}/rtl_lib.cc ${TB_DIR}/common_lib.cc generated/bootdata.cc
 	vlib $(dir $@)
-	${BENDER} script vsim ${VSIM_BENDER} --vlog-arg="${VLOG_FLAGS} -work $(dir $@) " > $@
+	${BENDER} script vsim ${VSIM_BENDER} -t rtl -t tech_mem -t tech_cells_generic_exclude_tc_sram --vlog-arg="${VLOG_FLAGS} -work $(dir $@) " > $@
 	echo '${VLOG} -work $(dir $@) ${TB_DIR}/rtl_lib.cc ${TB_DIR}/common_lib.cc generated/bootdata.cc -ccflags "-std=c++14 -I${MKFILE_DIR}/test -I${FESVR}/include -I${TB_DIR}"' >> $@
 	echo 'return 0' >> $@
-
+# -t tech_mem -t tech_cells_generic_exclude_tc_sram
 bin/snitch_cluster.vsim: ${VSIM_BUILDDIR}/compile.vsim.tcl work/lib/libfesvr.a
 	$(call QUESTASIM,tb_bin)
+
 
 #######
 # VCS #
